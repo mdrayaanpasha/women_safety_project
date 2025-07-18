@@ -1,0 +1,94 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserTypes {
+  LEGAL
+  POLICE
+  MENTAL
+}
+
+enum UserStatus {
+  INPROGRESS
+  VERIFIED
+  ACTIVATED
+  BANNED
+}
+
+enum ComplaintTypes {
+  PHYSICAL
+  EMOTIONAL
+  SEXUAL
+  FINANCIAL
+  CYBER
+  DOWRY
+  OTHER
+}
+
+enum StatusType {
+  QUEUED
+  AUTO_DISPATCHED
+  VOLUNTEER_ARRIVED
+  IN_PROGRESS
+  RESOLVED
+  CLOSED
+}
+
+model Users {
+  id              Int        @id @default(autoincrement())
+  type            UserTypes
+  email           String     @unique
+  name            String
+  password        String
+  filePath        String
+  createdAt       DateTime   @default(now())
+  userStatus      UserStatus
+  activationToken String?
+  location        String
+
+  legalDispatches  Dispatch[] @relation("LegalVolunteer")
+  policeDispatches Dispatch[] @relation("PoliceVolunteer")
+  mentalDispatches Dispatch[] @relation("MentalVolunteer")
+}
+
+model Complaints {
+  id          Int            @id @default(autoincrement())
+  phoneNo     String
+  name        String?
+  type        ComplaintTypes
+  status      StatusType     @default(QUEUED)
+  description String?
+  location    String?
+  reportedAt  DateTime       @default(now())
+
+  // Link to Dispatch
+
+  Dispatch Dispatch[]
+}
+
+model Dispatch {
+  id Int @id @default(autoincrement())
+
+  legalVolunteerId     Int?
+  legalVolunteerStatus StatusType
+  legalVolunteer       Users?     @relation("LegalVolunteer", fields: [legalVolunteerId], references: [id])
+
+  mentalVolunteerId     Int?
+  mentalVolunteerStatus StatusType
+  mentalVolunteer       Users?     @relation("MentalVolunteer", fields: [mentalVolunteerId], references: [id])
+
+  policeVolunteerId     Int?
+  policeVolunteerStatus StatusType
+  policeVolunteer       Users?     @relation("PoliceVolunteer", fields: [policeVolunteerId], references: [id])
+
+  complaint   Complaints @relation(fields: [complaintId], references: [id])
+  complaintId Int
+
+  createdAt DateTime @default(now())
+}
