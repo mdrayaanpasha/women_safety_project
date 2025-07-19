@@ -1,7 +1,10 @@
 import { Request, Response } from 'express';
-import { PrismaClient, UserTypes, StatusType } from '../generated/prisma';
+import { PrismaClient, UserTypes, StatusType, UserStatus } from '../generated/prisma';
 import jwt from "jsonwebtoken"
 const prisma = new PrismaClient();
+
+
+import bcrypt from "bcrypt";
 
 export class ComplaintController {
 
@@ -165,6 +168,7 @@ export class ComplaintController {
                     return res.status(400).json({ error: 'Invalid user type.' });
             }
 
+
             const updatedDispatch = await prisma.dispatch.update({
                 where: { id: dispatch.id },
                 data: updateData
@@ -181,6 +185,157 @@ export class ComplaintController {
         }
     }
 
+    static async getComplaintDetailsWithVolunteers(req: Request, res: Response): Promise<Response> {
+        try {
+            const { complaintId } = req.params;
+
+            if (!complaintId || isNaN(Number(complaintId))) {
+                return res.status(400).json({ error: 'A valid complaint ID is required.' });
+            }
+
+            const complaint = await prisma.complaints.findUnique({
+                where: { id: parseInt(complaintId) },
+                include: {
+
+                    Dispatch: {
+                        include: {
 
 
+                            legalVolunteer: {
+                                select: { id: true, name: true, email: true, mobile: true }
+                            },
+                            policeVolunteer: {
+                                select: { id: true, name: true, email: true, mobile: true }
+                            },
+                            mentalVolunteer: {
+                                select: { id: true, name: true, email: true, mobile: true }
+                            }
+
+                        }
+                    }
+                }
+            });
+
+            if (!complaint) {
+                return res.status(404).json({ error: 'Complaint not found.' });
+            }
+
+            const dispatches = complaint.Dispatch.map(dispatch => ({
+                dispatchId: dispatch.id,
+                createdAt: dispatch.createdAt,
+                legalVolunteer: dispatch.legalVolunteer ? {
+                    id: dispatch.legalVolunteer.id,
+                    name: dispatch.legalVolunteer.name,
+                    email: dispatch.legalVolunteer.email,
+                    mobile: dispatch.legalVolunteer.mobile,
+                    status: dispatch.legalVolunteerStatus
+                } : null,
+                policeVolunteer: dispatch.policeVolunteer ? {
+                    id: dispatch.policeVolunteer.id,
+                    name: dispatch.policeVolunteer.name,
+                    email: dispatch.policeVolunteer.email,
+                    mobile: dispatch.policeVolunteer.mobile,
+                    status: dispatch.policeVolunteerStatus
+                } : null,
+                mentalVolunteer: dispatch.mentalVolunteer ? {
+                    id: dispatch.mentalVolunteer.id,
+                    name: dispatch.mentalVolunteer.name,
+                    email: dispatch.mentalVolunteer.email,
+                    mobile: dispatch.mentalVolunteer.mobile,
+                    status: dispatch.mentalVolunteerStatus
+                } : null
+            }));
+
+            return res.status(200).json({
+                message: 'Complaint details with assigned volunteers fetched successfully.',
+                data: {
+                    complaintId: complaint.id,
+                    complainantName: complaint.name,
+                    phoneNo: complaint.phoneNo,
+                    complaintType: complaint.type,
+                    description: complaint.description,
+                    location: complaint.location,
+                    status: complaint.status,
+                    reportedAt: complaint.reportedAt,
+                    dispatches
+                }
+            });
+
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
+    }
+
+
+    static async createFictionalVolunteers(req: Request, res: Response): Promise<Response> {
+        try {
+            const count = 3;
+
+            const location: string = "12.00,12.00"
+
+            if (!count || isNaN(Number(count)) || !location || typeof location !== 'string') {
+                return res.status(400).json({ error: 'A valid count and location (as "latitude,longitude") are required.' });
+            }
+
+            const volunteersData = [];
+            const userTypes = [UserTypes.LEGAL, UserTypes.POLICE, UserTypes.MENTAL];
+
+            for (let i = 0; i < count; i++) {
+                for (const type of userTypes) {
+                    const fakeName = `${type}_Support_${i + 1}`;
+                    const fakeEmail = `${type.toLowerCase()}_support_${i + 1}@example.com`;
+                    const fakePassword = await bcrypt.hash('password123', 10);
+                    const fakeNo = parseInt(`123456${i}8${i}${i}`, 10)
+
+                    volunteersData.push({
+                        type,
+                        email: fakeEmail,
+                        name: fakeName,
+                        password: fakePassword,
+                        filePath: '/default/avatar.png',
+                        userStatus: UserStatus.ACTIVATED,
+                        mobile: fakeNo,
+                        location
+                    });
+                }
+            }
+
+            const created = await prisma.users.createMany({
+                data: volunteersData,
+                skipDuplicates: true
+            });
+
+            return res.status(201).json({
+                message: `${created.count} fictional volunteers created successfully.`,
+                createdCount: created.count,
+                location
+            });
+
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
+    }
+
+    static async deleteAll(req: Request, res: Response): Promise<Response> {
+        try {
+            // Delete dispatches first due to foreign key constraints
+            await prisma.dispatch.deleteMany({});
+            await prisma.complaints.deleteMany({});
+            await prisma.users.deleteMany({});
+
+            return res.status(200).json({
+                message: 'All users, complaints, and dispatches deleted successfully.'
+            });
+
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: 'Failed to delete all records.' });
+        }
+    }
 }
+
+
+
+

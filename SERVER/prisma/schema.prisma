@@ -44,6 +44,7 @@ model Users {
   id              Int        @id @default(autoincrement())
   type            UserTypes
   email           String     @unique
+  mobile          Int        @unique
   name            String
   password        String
   filePath        String

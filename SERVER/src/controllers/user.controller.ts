@@ -23,7 +23,7 @@ export class UserController {
 
     static async registerUser(req: any, res: Response): Promise<Response> {
         try {
-            const { email, name, password, type, location } = req.body;
+            const { email, name, password, type, location, phone } = req.body;
 
             if (!email || !name || !password || !type) {
                 return res.status(400).json({ error: 'Missing required fields' });
@@ -44,6 +44,7 @@ export class UserController {
                     location,
                     password, // Hash in production
                     type: type as UserTypes,
+                    mobile: phone,
                     filePath,
                     userStatus: UserStatus.INPROGRESS
                 }
@@ -74,6 +75,44 @@ export class UserController {
         } catch (error) {
             console.error(error);
             return res.status(500).json({ error: 'Internal server error' });
+        }
+    }
+    // In UserController.ts
+
+    static async getUsersPendingVerification(req: Request, res: Response): Promise<Response> {
+        try {
+            const { adminPassword } = req.body;
+
+            if (!adminPassword) {
+                return res.status(400).json({ error: 'Admin password is required.' });
+            }
+
+            if (adminPassword !== process.env.ADMIN_SECRET) {
+                return res.status(401).json({ error: 'Unauthorised: Incorrect admin password.' });
+            }
+
+            const users = await prisma.users.findMany({
+                where: { userStatus: 'INPROGRESS' },
+                select: {
+                    id: true,
+                    name: true,
+                    email: true,
+                    type: true,
+                    location: true,
+                    createdAt: true,
+                    filePath: true
+                }
+            });
+
+            return res.status(200).json({
+                message: 'Users pending verification fetched successfully.',
+                count: users.length,
+                users
+            });
+
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: 'Internal server error.' });
         }
     }
 
@@ -200,6 +239,50 @@ export class UserController {
         }
     }
 
+    static async rejectUser(req: Request, res: Response): Promise<Response> {
+        try {
+            const { id } = req.params;
+            const { adminPassword } = req.body;
+
+            if (!adminPassword) {
+                return res.status(400).json({ error: 'Admin password required' });
+            }
+
+            if (adminPassword !== process.env.ADMIN_SECRET) {
+                return res.status(401).json({ error: 'Unauthorized: Incorrect password' });
+            }
+
+            const user = await prisma.users.findFirst({
+                where: { id: parseInt(id, 10) }
+            });
+
+            if (!user) {
+                return res.status(404).json({ error: 'User not found' });
+            }
+
+            if (user.userStatus === 'BANNED') {
+                return res.status(400).json({ message: 'User is already banned.' });
+            }
+
+            const bannedUser = await prisma.users.update({
+                where: { id: parseInt(id, 10) },
+                data: {
+                    userStatus: UserStatus.BANNED
+                }
+            });
+
+            return res.status(200).json({
+                message: 'User has been banned successfully.',
+                user: bannedUser
+            });
+
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: 'Internal server error' });
+        }
+    }
+
+
     static async activateUser(req: Request, res: Response): Promise<Response> {
         try {
             const { token } = req.body;
@@ -246,5 +329,99 @@ export class UserController {
             return res.status(500).json({ error: 'Internal server error' });
         }
     }
+
+    static async checkAssignedComplaint(req: Request, res: Response): Promise<Response> {
+        try {
+            const { token } = req.body;
+
+            if (!token) {
+                return res.status(400).json({ error: 'Token is required.' });
+            }
+
+            let decoded: any;
+            try {
+                decoded = jwt.verify(token, process.env.JWT_SECRET as string);
+            } catch (error) {
+                return res.status(401).json({ error: 'Invalid or expired token.' });
+            }
+
+            const userId = decoded.userId;
+
+            const user = await prisma.users.findUnique({
+                where: { id: userId }
+            });
+
+            if (!user) {
+                return res.status(404).json({ error: 'User not found.' });
+            }
+
+            const userType = user.type;
+
+            // Build dynamic filter based on userType
+            const statusField =
+                userType === UserTypes.LEGAL ? 'legalVolunteerStatus' :
+                    userType === UserTypes.POLICE ? 'policeVolunteerStatus' :
+                        userType === UserTypes.MENTAL ? 'mentalVolunteerStatus' : null;
+
+            const volunteerIdField =
+                userType === UserTypes.LEGAL ? 'legalVolunteerId' :
+                    userType === UserTypes.POLICE ? 'policeVolunteerId' :
+                        userType === UserTypes.MENTAL ? 'mentalVolunteerId' : null;
+
+            if (!statusField || !volunteerIdField) {
+                return res.status(400).json({ error: 'Invalid user type.' });
+            }
+
+            // Fetch all dispatches where the volunteer is assigned and status != RESOLVED or CLOSED
+            const dispatches = await prisma.dispatch.findMany({
+                where: {
+                    [volunteerIdField]: userId,
+                    NOT: {
+                        [statusField]: { in: ['RESOLVED', 'CLOSED'] }
+                    }
+                },
+                include: {
+                    complaint: true
+                }
+            });
+            // console.log(dispatches)
+
+            if (dispatches.length === 0) {
+                return res.status(200).json({
+                    message: 'No active complaints assigned to this volunteer.',
+                    complaints: []
+                });
+            }
+
+            // Map dispatches into a clean response
+            const complaints = dispatches.map(dispatch => {
+                let volunteerStatus = dispatch[statusField];
+
+                return {
+                    complaintId: dispatch.complaint.id,
+                    complainantName: dispatch.complaint.name || 'Anonymous',
+                    complainantPhone: dispatch.complaint.phoneNo,
+                    type: dispatch.complaint.type,
+                    description: dispatch.complaint.description,
+                    location: dispatch.complaint.location,
+                    status: dispatch.complaint.status,
+                    reportedAt: dispatch.complaint.reportedAt,
+                    volunteerStatus,
+                    dispatchId: dispatch.id,
+                    dispatchCreatedAt: dispatch.createdAt
+                };
+            });
+
+            return res.status(200).json({
+                message: 'Active complaints assigned to volunteer fetched successfully.',
+                complaints
+            });
+
+        } catch (error) {
+            console.error(error);
+            return res.status(500).json({ error: 'Internal server error.' });
+        }
+    }
+
 
 }
